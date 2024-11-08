@@ -14,10 +14,10 @@ class MURaMData:
             # Load the default timestep
             timeStep = self.timeStep
 
-        muramModel = muram.MuramSnap(self.modelDir, timeStep)
+        self.muramModel = muram.MuramSnap(self.modelDir, timeStep)
         if self.verbose == True:
             print(f"run available props: {run1.available}")
 
-        self.Temp = muramModel.T
-        self.ne   = muramModel.ne
-
+        self.Temp = self.muramModel.Temp.T
+        self.ne   = self.muramModel.ne.T
+        self.vz   = self.muramModel.vx.T
