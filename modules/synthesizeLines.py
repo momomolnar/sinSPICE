@@ -24,8 +24,8 @@ class spectralLine():
 
     def def_GTnfn(self):
         """ Interpolation function for the computation of the emergent intensity"""
-        Trange = {"Tmin":4, "Tmax":7, "numTemperatures":30}
-        neRange = {"neMin":6, "neMax":11, "numNes":10}
+        Trange = {"Tmin":4, "Tmax":7, "numTemperatures":10}
+        neRange = {"neMin":6, "neMax":11, "numNes":5}
 
         self.G_tables(Trange, neRange)
 
@@ -67,6 +67,7 @@ class spectralLine():
         :return: G(T, ne)
 
         """
+
         return self.Gtne(T, ne)
 
 class spectrum():
@@ -106,15 +107,14 @@ class spectrum():
 
         for el in range(numZpoints):
 
-            dopplerShift = vz/self.c
+            dopplerShift = vz[el]/self.c
             thermalLineWidth = 2 * np.sqrt(np.log(2)
                                            * (self.lambda0 / self.c)**2
-                                           * (2 * self.kb * T / self.ionMass))
+                                           * (2 * self.kb * T[el] / self.ionMass))
             sigmaRadProfile = thermalLineWidth / 2.355
 
-            Icontrib = self.spectralLine.compute_G(T,ne) * Gaussian(self.lambdaGrid,
-                                                               dopplerShift,
-                                                               sigmaRadProfile)
+            Icontrib = (self.spectralLine.Gtne(T[el],ne[el])
+                        * Gaussian(self.lambdaGrid, dopplerShift, sigmaRadProfile))
             intensity += Icontrib
 
         return intensity
@@ -144,9 +144,8 @@ class spectrum():
             vz   = vz.reshape(nx*ny, nz)
             zClip = zClip.reshape(nx*ny)
             breakpoint()
-
             self.I2D = [self.compute_spectrum1D(el[1][el[0]:],
                                                 el[2][el[0]:],
                                                 el[3][el[0]:])
-                        for el in zip(zClip, Temp, ne, vz)]
+                        for el in tqdm(zip(zClip, Temp, ne, vz))]
 
