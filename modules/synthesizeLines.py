@@ -23,21 +23,32 @@ class spectralLine():
         self.level = level
         self.wvl = lineWavelength
 
-    def def_GTnfn(self, Trange=None, neRange=None, loadGtable=False, gSaveFile=None):
+    def def_GTnfn(self, TRange={}, neRange={}, loadGtable=False, gSaveFile=None):
         """ Interpolation function for the computation of the emergent intensity"""
 
         if loadGtable == False:
+            TRange = {"Tmin":4, "Tmax":7.5, "numTemperatures":100}
+            neRange = {"neMin":5, "neMax":12, "numNes":80}
 
-            if Trange == None:
-                Trange = {"Tmin":4, "Tmax":7, "numTemperatures":10}
-            if neRange==None:
-                neRange = {"neMin":6, "neMax":11, "numNes":5}
-
-            self.computeGtables(Trange, neRange)
+            self.computeGtables(TRange, neRange)
 
         if loadGtable == True:
             self.temp, self.ne, self.GTne_table = np.load(gSaveFile)
+
         self.Gtne = RectBivariateSpline(self.temp, self.ne, self.GTne_table)
+
+
+    def computeGTne_single(self, el):
+        ion = ch.ion(self.Ion, self.temp, self.ne[el])
+        ion.intensity()
+
+        dist = np.abs(np.asarray(ion.Intensity['wvl']) - self.wvl)
+        idx = np.argmin(dist)
+
+        GTne = ion.Intensity['intensity'][:, idx]
+
+        return GTne
+
 
 
     def computeGtables(self, Trange, neRange):
@@ -48,24 +59,21 @@ class spectralLine():
         :param neRange: [neMin, neMax, numNes] in log 10 scale
         :return: table of GTne
         """
-
         self.temp = 10**(Trange["Tmin"]
-                    + (Trange["Tmax"] - Trange["Tmin"]) * np.arange(Trange["numTemperatures"])/Trange["numTemperatures"])
+                         + (Trange["Tmax"]
+                            - Trange["Tmin"])
+                         * np.arange(Trange["numTemperatures"]) / Trange["numTemperatures"])
         self.ne = 10**(neRange["neMin"]
-                    + (neRange["neMax"] - neRange["neMin"])
-                       * np.arange(neRange["numNes"])/neRange["numNes"])
+                       + (neRange["neMax"]
+                          - neRange["neMin"])
+                       * np.arange(neRange["numNes"]) / neRange["numNes"])
 
-        self.GTne_table = np.zeros((Trange["numTemperatures"],
-                                    neRange["numNes"]))
+        # self.GTne_table = np.zeros((Trange["numTemperatures"],
+        #                             neRange["numNes"]))
 
-        for el in tqdm(np.arange(neRange["numNes"])):
-
-            ion = ch.ion(self.Ion, self.temp, self.ne[el])
-            ion.intensity()
-
-            dist = np.abs(np.asarray(ion.Intensity['wvl']) - self.wvl)
-            idx = np.argmin(dist)
-            self.GTne_table[:, el] = ion.Intensity['intensity'][:, idx]
+        self.GTne_table = Parallel(n_jobs=49)(delayed(self.computeGTne_single)(el)
+                                              for el in tqdm(range(neRange["numNes"])))
+        self.GTne_table = np.array(self.GTne_table).T
 
         np.savez((f"G_Tmin_max_num_{Trange["Tmin"]}_{Trange["Tmax"]}_{Trange["numTemperatures"]}_"
                   + f"ne_{neRange["neMin"]}_{neRange["neMax"]}_{neRange["numNes"]}"),
@@ -87,7 +95,7 @@ class spectrum():
     Main class of the exercise that synthesizes the lines
     """
 
-    def __init__(self, ionDict, loadGTables=False):
+    def __init__(self, ionDict, loadGTables=False, GTablesFile=None):
 
         mass_dict = {"ne": 10, "fe":26, "n":7, "o": 8, "c":12,
                      "s":16}
@@ -98,6 +106,8 @@ class spectrum():
         self.numWavelengths = ionDict["numWaves"]
         self.lambda0 = ionDict["lambda0"]
         self.dlambda = ionDict["dlambda"]
+        self.loadGTables = loadGTables
+        self.GTablesFile = GTablesFile
 
 
         self.c = 3e8
@@ -109,7 +119,8 @@ class spectrum():
         self.spectralLine = spectralLine(self.Ion,
                                          self.IonLevel,
                                          self.lambda0)
-        self.spectralLine.def_GTnfn(loadGTables)
+        self.spectralLine.def_GTnfn(self.loadGTables,
+                                    self.GTablesFile)
 
     def compute_spectrum1D(self, T, ne, vz):
         """ Function to compute 1D spectrum from a column"""
@@ -129,6 +140,9 @@ class spectrum():
                         * Gaussian(self.lambdaGrid,
                                    (self.lambda0 + dopplerShift),
                                    sigmaRadProfile))
+
+            breakpoint()
+
             intensity += Icontrib[0, :]
         return intensity
 
@@ -161,7 +175,7 @@ class spectrum():
 
             self.I2D = Parallel(n_jobs=49)(delayed(self.compute_spectrum1D)(Temp[el, zClip[el]:],
                                                                             ne[el, zClip[el]:],
-                                                                             vz[el, zClip[el]:])
+                                                                            vz[el, zClip[el]:])
                                            for el in tqdm(range(nx*ny)))
             self.I2D = np.array(self.I2D)
 
