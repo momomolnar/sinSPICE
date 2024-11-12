@@ -71,7 +71,7 @@ class spectralLine():
         # self.GTne_table = np.zeros((Trange["numTemperatures"],
         #                             neRange["numNes"]))
 
-        self.GTne_table = Parallel(n_jobs=49)(delayed(self.computeGTne_single)(el)
+        self.GTne_table = Parallel(n_jobs=40)(delayed(self.computeGTne_single)(el)
                                               for el in tqdm(range(neRange["numNes"])))
         self.GTne_table = np.array(self.GTne_table).T
 
@@ -136,12 +136,11 @@ class spectrum():
                                            * (2 * self.kb * T[el] / self.ionMass))
             sigmaRadProfile = thermalLineWidth / 2.355
 
-            Icontrib = (self.spectralLine.Gtne(T[el],ne[el])
-                        * Gaussian(self.lambdaGrid,
-                                   (self.lambda0 + dopplerShift),
-                                   sigmaRadProfile))
-
-            breakpoint()
+            if self.spectralLine.Gtne(T[el],ne[el]) > 0:
+                lineProfile = Gaussian(self.lambdaGrid, (self.lambda0 + dopplerShift), sigmaRadProfile)
+                Icontrib = self.spectralLine.Gtne(T[el],ne[el]) * lineProfile
+            else:
+                Icontrib = np.zeros((1, self.numWavelengths))
 
             intensity += Icontrib[0, :]
         return intensity
