@@ -110,7 +110,7 @@ class spectrum():
         self.GTablesFile = GTablesFile
 
 
-        self.c = 3e8
+        self.c = 3e10
         self.kb = 1.380649e-23
         self.lambdaGrid = (self.lambda0
                            + (self.numWavelengths // 2
@@ -130,7 +130,7 @@ class spectrum():
 
         for el in range(numZpoints):
 
-            dopplerShift = vz[el] /1e5 /self.c * self.lambda0
+            dopplerShift = vz[el] /self.c * self.lambda0
             thermalLineWidth = 2 * np.sqrt(np.log(2)
                                            * (self.lambda0 / self.c)**2
                                            * (2 * self.kb * T[el] / self.ionMass))
