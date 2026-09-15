@@ -1,0 +1,801 @@
+% Generated from spice_optical_depth.md with Pandoc; retain the Markdown source
+% as the editable version.
+% Options for packages loaded elsewhere
+\PassOptionsToPackage{unicode}{hyperref}
+\PassOptionsToPackage{hyphens}{url}
+\PassOptionsToPackage{dvipsnames,svgnames,x11names}{xcolor}
+\documentclass[
+]{article}
+\usepackage{xcolor}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb}
+\setcounter{secnumdepth}{-\maxdimen} % remove section numbering
+\usepackage{iftex}
+\ifPDFTeX
+  \usepackage[T1]{fontenc}
+  \usepackage[utf8]{inputenc}
+  \usepackage{textcomp} % provide euro and other symbols
+\else % if luatex or xetex
+  \usepackage{unicode-math} % this also loads fontspec
+  \defaultfontfeatures{Scale=MatchLowercase}
+  \defaultfontfeatures[\rmfamily]{Ligatures=TeX,Scale=1}
+\fi
+\usepackage{lmodern}
+\ifPDFTeX\else
+  % xetex/luatex font selection
+\fi
+% Use upquote if available, for straight quotes in verbatim environments
+\IfFileExists{upquote.sty}{\usepackage{upquote}}{}
+\IfFileExists{microtype.sty}{% use microtype if available
+  \usepackage[]{microtype}
+  \UseMicrotypeSet[protrusion]{basicmath} % disable protrusion for tt fonts
+}{}
+\makeatletter
+\@ifundefined{KOMAClassName}{% if non-KOMA class
+  \IfFileExists{parskip.sty}{%
+    \usepackage{parskip}
+  }{% else
+    \setlength{\parindent}{0pt}
+    \setlength{\parskip}{6pt plus 2pt minus 1pt}}
+}{% if KOMA class
+  \KOMAoptions{parskip=half}}
+\makeatother
+\usepackage{listings}
+\newcommand{\passthrough}[1]{#1}
+\lstset{defaultdialect=[5.3]Lua}
+\lstset{defaultdialect=[x86masm]Assembler}
+\lstset{breaklines=true,breakatwhitespace=false,columns=fullflexible}
+\usepackage{longtable,booktabs,array}
+\newcounter{none} % for unnumbered tables
+\usepackage{calc} % for calculating minipage widths
+% Correct order of tables after \paragraph or \subparagraph
+\usepackage{etoolbox}
+\makeatletter
+\patchcmd\longtable{\par}{\if@noskipsec\mbox{}\fi\par}{}{}
+\makeatother
+% Allow footnotes in longtable head/foot
+\IfFileExists{footnotehyper.sty}{\usepackage{footnotehyper}}{\usepackage{footnote}}
+\makesavenoteenv{longtable}
+\setlength{\emergencystretch}{3em} % prevent overfull lines
+\providecommand{\tightlist}{%
+  \setlength{\itemsep}{0pt}\setlength{\parskip}{0pt}}
+\usepackage{bookmark}
+\IfFileExists{xurl.sty}{\usepackage{xurl}}{} % add URL line breaks if available
+\urlstyle{same}
+\hypersetup{
+  pdftitle={SPICE line optical depths from MURaM},
+  colorlinks=true,
+  linkcolor={Maroon},
+  filecolor={Maroon},
+  citecolor={Blue},
+  urlcolor={Blue},
+  pdfcreator={LaTeX via pandoc}}
+
+\title{SPICE line optical depths from MURaM}
+\author{}
+\date{}
+
+\begin{document}
+\maketitle
+
+\passthrough{\lstinline!compute\_spice\_optical\_depth.py!} calculates
+the line optical depth through each vertical MURaM column, including
+thermal broadening, optional microturbulence, the resolved velocity, and
+stimulated emission. It also synthesizes an optically thin comparison
+spectrum from the same atomic populations. The reusable physics and
+population-table code is in
+\passthrough{\lstinline!modules/spiceOpticalDepth.py!}.
+
+This is an \textbf{equilibrium, bound-bound opacity diagnostic}. CHIANTI
+populations are not recomputed in response to the radiation trapped by
+an optically thick line. Consequently, a large optical depth flags a
+failure of the optically thin assumption; the saved comparison intensity
+is not a prediction of the emergent intensity in that regime.
+
+\section{Line selection and the instrument
+paper}\label{line-selection-and-the-instrument-paper}
+
+The catalogue follows Table 1 of \textbf{SPICE Consortium et al.~(2020),
+``The Solar Orbiter SPICE instrument: An extreme UV imaging
+spectrometer,'' A\&A 642, A14},
+\href{https://doi.org/10.1051/0004-6361/201935574}{DOI},
+\href{https://www2.mps.mpg.de/homes/solanki/publikationen/j532.pdf}{accessible
+PDF}. The paper specifies bands of 704--790 and 973--1049 Å. Its table
+is a selection of diagnostics, not every transition in those bands. Si
+XII is a second-order line: the absorbing photon has wavelength 520.67
+Å, while its nominal first-order-equivalent detector coordinate is
+1041.34 Å. All opacity and emissivity calculations use the physical
+photon wavelength.
+
+{\def\LTcaptype{none} % do not increment counter
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 8\tabcolsep) * \real{0.1765}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 8\tabcolsep) * \real{0.1765}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 8\tabcolsep) * \real{0.2353}}
+  >{\raggedleft\arraybackslash}p{(\linewidth - 8\tabcolsep) * \real{0.2353}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 8\tabcolsep) * \real{0.1765}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+CLI identifier
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Ion
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+Paper wavelength (Å)
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedleft
+Paper log10 T (K)
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Default
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\passthrough{\lstinline!h\_1\_1025!} & H I & 1025.72 & 4.0 & \\
+\passthrough{\lstinline!c\_2\_1036!} & C II & 1036.34 & 4.3 & \\
+\passthrough{\lstinline!c\_3\_977!} & C III & 977.03 & 4.5 & yes \\
+\passthrough{\lstinline!s\_5\_786!} & S V & 786.47 & 5.2 & yes \\
+\passthrough{\lstinline!o\_4\_787!} & O IV & 787.72 & 5.2 & yes \\
+\passthrough{\lstinline!o\_5\_760!} & O V & 760.43 & 5.4 & yes \\
+\passthrough{\lstinline!o\_6\_1031!} & O VI & 1031.93 & 5.5 & yes \\
+\passthrough{\lstinline!o\_6\_1037!} & O VI & 1037.64 & 5.5 & yes \\
+\passthrough{\lstinline!ne\_6\_1005!} & Ne VI & 1005.79 & 5.6 & \\
+\passthrough{\lstinline!si\_7\_1049!} & Si VII & 1049.25 & 5.6 & \\
+\passthrough{\lstinline!ne\_8\_770!} & Ne VIII & 770.42 & 5.8 & yes \\
+\passthrough{\lstinline!mg\_8\_772!} & Mg VIII & 772.31 & 5.9 & \\
+\passthrough{\lstinline!mg\_9\_706!} & Mg IX & 706.02 & 6.0 & yes \\
+\passthrough{\lstinline!fe\_10\_1028!} & Fe X & 1028.04 & 6.0 & \\
+\passthrough{\lstinline!mg\_11\_997!} & Mg XI & 997.44 & 6.2 & \\
+\passthrough{\lstinline!si\_12\_520!} & Si XII, order 2 & 520.67 & 6.3
+& \\
+\passthrough{\lstinline!fe\_18\_974!} & Fe XVIII & 974.84 & 6.9 & \\
+\passthrough{\lstinline!fe\_20\_721!} & Fe XX & 721.55 & 7.0 & \\
+\end{longtable}
+}
+
+The eight defaults are my practical starting set for this repository's
+transition-region/coronal models. They include C III, the O VI doublet,
+and Ne VIII, plus intermediate-temperature diagnostics and Mg IX. This
+default set is a software choice. The table's approximate temperatures
+are labels, \textbf{not temperature masks or substitutes for an
+ionization balance}.
+
+Use \passthrough{\lstinline!--all-lines!} for all 18 entries or
+\passthrough{\lstinline!--lines!} for a subset. H I is explicitly
+labelled an approximation when selected: Ly beta usually needs an NLTE
+hydrogen calculation, ideally using the simulation's hydrogen
+populations when available. C II and C III also need particular care
+with ionization equilibrium and radiative-transfer effects. The script
+does not automatically interpret the reader's
+\passthrough{\lstinline!H\_1!}, \passthrough{\lstinline!HH!}, or
+\passthrough{\lstinline!HHp!} files, whose definitions must first be
+established for the particular simulation.
+
+\section{How this fits the existing
+repository}\label{how-this-fits-the-existing-repository}
+
+The implementation reuses \passthrough{\lstinline!MuramCube!} from
+\passthrough{\lstinline!modules/muram.py!} and follows the transpose
+used by \passthrough{\lstinline!MURaMData!}. It opens only the four
+required physical cubes. The full-domain input files are:
+
+{\def\LTcaptype{none} % do not increment counter
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+File
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Quantity
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Required unit
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\passthrough{\lstinline!Header.<iteration>!} & Dimensions, spacings,
+simulation time & cm for spacings, s for time \\
+\passthrough{\lstinline!eosT.<iteration>!} & Temperature & K \\
+\passthrough{\lstinline!eosne.<iteration>!} & Electron density &
+cm\^{}-3 \\
+\passthrough{\lstinline!result\_prim\_0.<iteration>!} & Mass density & g
+cm\^{}-3 \\
+\passthrough{\lstinline!result\_prim\_1.<iteration>!} & Native vertical
+velocity \passthrough{\lstinline!vx!} & cm s\^{}-1 \\
+\end{longtable}
+}
+
+An iteration is formatted with at least six digits, for example
+\passthrough{\lstinline!400000!}. Iteration increments are not physical
+time intervals; the saved physical time comes from the header.
+
+The low-level reader documents native axes
+\passthrough{\lstinline!(x, y, z)!} with \textbf{x vertical}. Applying
+\passthrough{\lstinline!.T!} gives \passthrough{\lstinline!(z, y, x)!}:
+two horizontal axes followed by height, as in the other synthesis
+scripts. The line-of-sight cell length is therefore
+\passthrough{\lstinline!dX[0]!}, including when the three header
+spacings differ. Positive \passthrough{\lstinline!vx!} points toward an
+observer at the upper x boundary, giving a blueshift.
+\passthrough{\lstinline!--observer top!} implements this convention;
+\passthrough{\lstinline!--observer bottom!} reverses the Doppler sign.
+Only vertical, axis-aligned rays are implemented. A slanted view
+requires resampling along rays and projecting all velocity components.
+
+\passthrough{\lstinline!--downsample!} strides the two horizontal
+dimensions. It does not average pixels and does not skip vertical cells
+or multiply their path lengths. Rectangular horizontal domains are
+supported.
+
+The default integrates all vertical cells.
+\passthrough{\lstinline!--height-start!} and
+\passthrough{\lstinline!--height-stop!} select an explicit interval with
+Python's inclusive-start/exclusive-stop convention. For a solar
+observation, choose the lower boundary to exclude the subsurface
+convection zone according to your model's geometry. Index 150 in the
+existing scripts is not a universal photospheric height. There is no
+automatic temperature clipping: a cool foreground structure can absorb
+radiation from hotter material behind it, so dropping it changes the
+question being answered. The pre-existing MURaM
+\passthrough{\lstinline!tau!} field is not a SPICE line optical depth
+and is not used here.
+
+\section{Atomic populations and
+abundances}\label{atomic-populations-and-abundances}
+
+For element X and ion stage q, define
+
+\[
+A_X = n_X/n_H, \qquad F_q(T)=n_{X,q}/n_X, \qquad
+p_i(T,n_e)=n_{X,q,i}/n_{X,q}.
+\]
+
+The number density of hydrogen nuclei is obtained from mass density:
+
+\[
+n_H = X_H\rho/m_H, \qquad
+n_i = n_H A_X F_q(T)p_i(T,n_e).
+\]
+
+\passthrough{\lstinline!X\_H!} defaults to 0.74 and is an explicit
+assumed composition parameter. Set
+\passthrough{\lstinline!--hydrogen-mass-fraction!} to the value
+consistent with the model EOS. The script does not infer it from an
+abundance table. \passthrough{\lstinline!m\_H = 1.00794 m\_u!} is used;
+atomic weights for thermal widths and all other constants are declared
+in CGS in the module. No ion mass in kilograms enters a CGS
+thermal-width expression.
+
+Using rho avoids a fixed \passthrough{\lstinline!n\_H/n\_e!} conversion,
+which would be particularly inappropriate in partially ionized plasma.
+\passthrough{\lstinline!n\_H!} counts nuclei in all hydrogen ionization
+states, not only neutral hydrogen or protons.
+
+For each ion, the code calls
+\passthrough{\lstinline!ChiantiPy.core.ion(..., temperature=T, eDensity=ne, abundance=...)!},
+uses \passthrough{\lstinline!IoneqOne!} for the installed default
+equilibrium balance, and calls \passthrough{\lstinline!populate()!} for
+the fractional level populations. \passthrough{\lstinline!Wgfa!}
+supplies transition wavelengths and Einstein A coefficients;
+\passthrough{\lstinline!Elvlc!} supplies level IDs and statistical
+weights \passthrough{\lstinline!mult = 2J+1!}. These interfaces are
+documented in the
+\href{https://github.com/chianti-atomic/ChiantiPy/blob/master/ChiantiPy/core/Ion.py}{ChiantiPy
+source} and the \href{https://www.chiantidatabase.org/cug.pdf}{CHIANTI
+user guide}, especially Sections 3.1 and 6.1--6.5.
+
+The default abundance filename stem is
+\passthrough{\lstinline!sun\_photospheric\_2021\_asplund!}, present in
+the locally installed CHIANTI 11.0.2 database. Choose a different
+installed file with \passthrough{\lstinline!--abundance!} for a
+different composition or coronal FIP enhancement. Check the actual
+available filenames: older distributions can differ. The selected
+elemental abundance and equilibrium filename are written to metadata.
+\passthrough{\lstinline!populate()!} uses its installed default
+corrections and equilibrium proton density. Neither the MURaM
+electron-density cube nor a CHIANTI version number alone implies that
+non-equilibrium ionization or the advanced CHIANTI 11 ionization models
+are being used.
+
+\subsection{Transition identification}\label{transition-identification}
+
+The default match window is \textbf{±0.15 Å around the paper
+wavelength}. Only positive (observed-energy) wavelengths and positive A
+coefficients are accepted. Theoretical wavelengths, stored as negative
+numbers in CHIANTI, are excluded. If no transition matches, the run
+fails rather than choosing an arbitrarily distant line. This
+interpretation of the files follows
+\href{https://www.chiantidatabase.org/cug.pdf}{CHIANTI's radiative-data
+description}.
+
+Every matching same-ion component is retained and its opacity/emission
+is summed. This handles the closely spaced H I fine-structure components
+and the two selected Fe X components at 1028.053 and 1028.082 Å in the
+local data. The code prints and saves every selected wavelength, level
+pair, A coefficient, statistical weight, and effective oscillator
+strength. This is a feature selection window, not a full synthesis of
+every line falling anywhere within the final spectral window; other-ion
+blends are absent.
+
+The local atomic-data check found C III 977.020 Å, O VI 1031.912 and
+1037.613 Å, and Si VII 1049.140 Å. The latter differs from the paper by
+0.110 Å and motivated the 0.15 Å matching default. In the local Si VII
+file it is the
+\passthrough{\lstinline!2s2 2p4 3P1!}--\passthrough{\lstinline!2s2 2p4 1S0!}
+transition (levels 2--5). All 18 catalogue features were checked against
+the installed database. These values are local-data findings, not
+changes to the paper's wavelengths.
+
+The nearest selected component defines the exact reference wavelength
+and spectral grid center. Both this reference and the original paper
+wavelength are saved. For another database release, inspect the printed
+selections before increasing
+\passthrough{\lstinline!--match-tolerance!}.
+
+\subsection{Population tables}\label{population-tables}
+
+The stored table is
+
+\[
+Q_i(\log_{10}T,\log_{10}n_e)=A_X F_q(T)p_i(T,n_e)=n_i/n_H.
+\]
+
+Only the levels needed by the selected transitions are retained. Lines
+of the same ion share a solve, including the O VI doublet. Default grids
+are \passthrough{\lstinline!log10(T) = 3..8!} with 101 points and
+\passthrough{\lstinline!log10(ne) = 6..17!} with 45 points. The
+interpolation is bilinear in the logarithms of T and ne, applied to the
+linear values of Q. It therefore preserves nonnegative corner values and
+handles exact zeros without taking their logarithms. Solves are skipped
+only where the tabulated equilibrium ion fraction is exactly zero.
+
+The run rejects nonfinite/negative population values, solver errors, and
+populations that do not sum to unity. MURaM temperature, density, and
+electron density must be positive and finite. Velocities must be finite
+and below 0.01 c in magnitude. Model values outside the atomic table
+cause an explicit error; there is no extrapolation, edge clipping, or
+silent replacement by zero. Extend
+\passthrough{\lstinline!--log-t!}/\passthrough{\lstinline!--log-ne!} to
+cover your selected atmosphere. Bounds are checked while processing
+column blocks.
+
+Population caches are compressed NPZ files named by a signature. The
+signature includes grid coordinates, selected transitions, ChiantiPy and
+database versions, numerical abundances, the equilibrium array, and
+hashes of files for the ion and next higher stage.
+\passthrough{\lstinline!--rebuild-tables!} forces a rebuild. Cache
+writes use an atomic rename. A cache is a performance optimization, not
+an accuracy guarantee: compare maps with denser grids, particularly near
+steep ion-fraction gradients. Very faint ion-fraction tails can have
+large relative interpolation errors even when their absolute opacity
+contribution is negligible.
+
+\section{Opacity and spectral synthesis
+equations}\label{opacity-and-spectral-synthesis-equations}
+
+For a transition from lower l to upper u, let \(\lambda_0\) be the
+physical rest wavelength in cm and \(\nu_0=c/\lambda_0\). The Doppler
+width parameter is
+
+\[
+b=\sqrt{2k_BT/m_X+\xi^2}, \qquad \Delta\nu_D=\nu_0 b/c.
+\]
+
+Here \(\xi\), set by \passthrough{\lstinline!--microturbulence!}, is a
+\textbf{Doppler b parameter} in km/s, not a Gaussian standard deviation
+or FWHM. For this convention the Gaussian velocity standard deviation is
+\(b/\sqrt{2}\). The temperature is used as both the electron temperature
+for populations and the ion temperature for broadening.
+
+With \(v_{\rm red}>0\) away from the observer, the implemented center
+and profile are
+
+\[
+\nu_c=\frac{\nu_0}{1+v_{\rm red}/c}, \qquad
+\phi_\nu=\frac{1}{\sqrt{\pi}\Delta\nu_D}
+\exp\left[-\left(\frac{\nu-\nu_c}{\Delta\nu_D}\right)^2\right].
+\]
+
+This centers the line at \(\lambda_0(1+v_{\rm red}/c)\), consistent with
+the nonrelativistic wavelength Doppler convention. Widths use the
+rest-frame \(\nu_0\); relativistic transfer factors are neglected. The
+profile is normalized over frequency, \(\int\phi_\nu d\nu=1\), and has
+units Hz\^{}-1.
+
+The extinction coefficient, including stimulated emission, is
+
+\[
+\boxed{\alpha_\nu=\frac{\lambda_0^2 A_{ul}}{8\pi}
+\left(\frac{g_u}{g_l}n_l-n_u\right)\phi_\nu}
+\quad [\mathrm{cm}^{-1}].
+\]
+
+Equivalently,
+
+\[
+\alpha_\nu=\frac{\pi e^2}{m_e c}f_{lu}
+\left(n_l-\frac{g_l}{g_u}n_u\right)\phi_\nu,\qquad
+f_{lu}=\frac{m_e c}{8\pi^2 e^2}\frac{g_u}{g_l}\lambda_0^2 A_{ul}.
+\]
+
+The implementation uses the A-based expression directly. The effective f
+derived by this relation is also recorded; this avoids relying on a gf
+field that can be absent or zero for a weak/forbidden transition. In
+particular, the lower-level occupation is explicitly solved: it is not
+assumed to equal the entire ion population for metastable transitions.
+Negative extinction from a population inversion is retained and flagged,
+rather than clipped away.
+
+For cell-centered model data, the total column optical depth at each
+frequency is
+
+\[
+\boxed{\tau(\nu)=\sum_{k=k_{\min}}^{k_{\max}-1}\alpha_{\nu,k}\,\Delta s_k},
+\qquad \Delta s_k=\mathtt{dX[0]}.
+\]
+
+Summing complete cells is intentional: a trapezoidal integral over cell
+centers would discard half of each boundary cell. A single-cell
+atmosphere still has optical depth \(\alpha\Delta s\). The present file
+format supplies uniform spacings; a genuinely nonuniform grid needs a
+per-cell path-length implementation.
+
+The spontaneous emissivity and optically thin comparison intensity are
+
+\[
+j_\nu=\frac{h\nu_0}{4\pi}A_{ul}n_u\phi_\nu,\qquad
+I_{\lambda,\mathrm{thin}}=\frac{c}{\lambda^2}10^{-8}
+\sum_k j_{\nu,k}\Delta s_k.
+\]
+
+The factor \(10^{-8}\) converts intensity per cm of wavelength to
+intensity per Å. \textbf{Optical depth itself gets no wavelength
+Jacobian}: \passthrough{\lstinline!tau2D!} simply samples \(\tau_\nu\)
+at \(\nu=c/\lambda\). Both calculations include the actual column length
+and number densities, with no emission-measure normalization hidden in a
+contribution function.
+
+The output does not solve \(dI_\nu/ds=-\alpha_\nu I_\nu+j_\nu\). In
+particular, multiplying the total thin intensity by
+\passthrough{\lstinline!exp(-tau2D)!} would incorrectly put all emission
+behind a foreground screen. Emission distributed along a ray requires
+depth-dependent transfer; resonance scattering additionally changes the
+source function and potentially the level populations.
+
+\section{Running the script}\label{running-the-script}
+
+Use an environment with Python 3.9+, NumPy, SciPy, and ChiantiPy.
+Matplotlib is needed for \texttt{--plot} and the standalone visualization script.
+\passthrough{\lstinline!joblib!} is needed only for
+\passthrough{\lstinline!--jobs!} other than 1. A CHIANTI atomic database
+is a separate installation from the Python package; see the
+\href{https://www.chiantidatabase.org/chianti_download.html}{official
+download instructions}.
+
+\begin{lstlisting}[language=bash]
+python -m pip install numpy scipy ChiantiPy joblib matplotlib
+export XUVTOP=/path/to/CHIANTI
+python compute_spice_optical_depth.py --list-lines
+\end{lstlisting}
+
+The repository's \passthrough{\lstinline!.venv!} had none of these
+scientific packages during validation. An existing environment with them
+was available at
+\passthrough{\lstinline!/Users/memolnar/miniconda3/envs/SPICE\_DEMs/bin/python!},
+with the database at
+\passthrough{\lstinline!/Users/memolnar/Work/CHIANTI!}. No environments
+or database files were modified.
+
+Start with a single C III snapshot and a sparse horizontal sample. The
+paths and iteration below follow
+\passthrough{\lstinline!example\_CIII.py!}; adapt them to your machine:
+
+\begin{lstlisting}[language=bash]
+python compute_spice_optical_depth.py \
+  --model-dir /glade/campaign/hao/radmhd/Rempel/Spot_Motion/AR_25Mm_v1000_vz300_disp/3D \
+  --iterations 400000 \
+  --lines c_3_977 \
+  --height-start 150 \
+  --downsample 8 \
+  --output-dir optical_depth_CIII \
+  --jobs 8
+\end{lstlisting}
+
+Here height index 150 is an example borrowed from the repo's existing
+boundary choice; establish that it is suitable for this snapshot before
+interpreting the column. \passthrough{\lstinline!--height-stop!}
+defaults to the top of the model. Leaving out
+\passthrough{\lstinline!--height-start!} includes the entire input
+column.
+
+Run all eight default lines over an iteration range:
+
+\begin{lstlisting}[language=bash]
+python compute_spice_optical_depth.py \
+  --model-dir /path/to/MURaM/3D \
+  --t-start 400000 --t-end 502000 --time-step 2000 \
+  --height-start 150 --downsample 2 \
+  --output-dir optical_depth_default --jobs 8
+\end{lstlisting}
+
+Or explicitly choose the resonance diagnostics:
+
+\begin{lstlisting}[language=bash]
+python compute_spice_optical_depth.py \
+  --model-dir /path/to/MURaM/3D --iterations 400000 402000 \
+  --lines c_3_977 o_6_1031 o_6_1037 ne_8_770 \
+  --height-start 150 --microturbulence 10 \
+  --velocity-range 250 --num-waves 1001
+\end{lstlisting}
+
+To compute the whole catalogue, substitute
+\passthrough{\lstinline!--all-lines!} for
+\passthrough{\lstinline!--lines ...!}. For a cooler/denser selected
+atmosphere or a convergence check, change the table grids, for example
+\passthrough{\lstinline!--log-t 3 8 201 --log-ne 5 18 105!}.
+
+Build tables on their own, reusable in subsequent matching runs:
+
+\begin{lstlisting}[language=bash]
+python compute_spice_optical_depth.py --tables-only \
+  --lines c_3_977 o_6_1031 o_6_1037 ne_8_770 \
+  --cache-dir opacity_tables --jobs 8
+\end{lstlisting}
+
+Table creation can be expensive for ions with many levels. Processes
+parallelize the density samples; snapshots and line features are
+processed sequentially. On HPC systems, constrain BLAS threads (for
+example \passthrough{\lstinline!OPENBLAS\_NUM\_THREADS=1!} and
+\passthrough{\lstinline!OMP\_NUM\_THREADS=1!}) when using many worker
+processes, and allocate enough memory for each worker.
+\passthrough{\lstinline!--jobs -1!} requests all available CPUs.
+
+Input cubes stay memory mapped.
+\passthrough{\lstinline!--chunk-columns!} limits the atmospheric arrays
+held for integration, and wavelengths are streamed without allocating a
+full columns × heights × wavelengths profile array. Output arrays remain
+in memory for one line and snapshot: the two large float64 arrays
+together need about
+\passthrough{\lstinline!16 * n\_horizontal\_1 * n\_horizontal\_2 * num\_waves!}
+bytes, plus maps, table and compression overhead. A 512 × 512 field with
+401 wavelengths needs about 1.57 GiB for those two arrays alone. Reduce
+horizontal sampling or wavelength count when necessary; chunking alone
+does not reduce output-array memory.
+
+Existing output files are refused unless
+\passthrough{\lstinline!--overwrite!} is supplied. Different abundances,
+height cuts, or broadening choices should normally use different output
+directories so they can be compared. Files required for every selected
+iteration are checked before building tables.
+
+\section{Outputs and interpretation}\label{outputs-and-interpretation}
+
+One file is saved per feature and snapshot:
+\passthrough{\lstinline!spice\_opacity\_c\_3\_977\_400000.npz!}, for
+example.
+
+{\def\LTcaptype{none} % do not increment counter
+\begin{longtable}[]{@{}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}
+  >{\raggedright\arraybackslash}p{(\linewidth - 4\tabcolsep) * \real{0.3333}}@{}}
+\toprule\noalign{}
+\begin{minipage}[b]{\linewidth}\raggedright
+Key
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Shape
+\end{minipage} & \begin{minipage}[b]{\linewidth}\raggedright
+Meaning
+\end{minipage} \\
+\midrule\noalign{}
+\endhead
+\bottomrule\noalign{}
+\endlastfoot
+\passthrough{\lstinline!tau2D!} &
+\texttt{(1, native\_z, native\_y, }\allowbreak\texttt{n\_wavelengths)} &
+Total selected-column spectral optical depth \\
+\passthrough{\lstinline!I2D!} & same & Optically thin intensity, erg
+s\^{}-1 cm\^{}-2 sr\^{}-1 Å\^{}-1 \\
+\passthrough{\lstinline!tau\_rest!} &
+\passthrough{\lstinline!(1, native\_z, native\_y)!} & Optical depth at
+the exact atomic reference wavelength, including model velocities \\
+\passthrough{\lstinline!tau\_peak!} & same map shape & Maximum optical
+depth among the sampled wavelengths \\
+\passthrough{\lstinline!tau\_static!} & same map shape & Optical depth
+at the reference wavelength with all resolved velocities set to zero \\
+\passthrough{\lstinline!wvlGrid!} &
+\passthrough{\lstinline!(n\_wavelengths,)!} & Increasing physical
+wavelengths in Å \\
+\passthrough{\lstinline!velocityGrid!} &
+\passthrough{\lstinline!(n\_wavelengths,)!} & Offsets relative to the
+atomic reference in km/s, red positive \\
+\passthrough{\lstinline!detectorWvlGrid!} &
+\passthrough{\lstinline!(n\_wavelengths,)!} &
+\passthrough{\lstinline!order * wvlGrid!}, a coordinate only, not an
+instrument response \\
+\passthrough{\lstinline!metadata!} & scalar JSON string & Atomic
+selections, units, parameters, versions, file hashes, geometry,
+diagnostics and command \\
+\end{longtable}
+}
+
+The leading dimension is length one for compatibility with the
+repository's time-leading \passthrough{\lstinline!I2D!} convention.
+Horizontal dimensions include any downsampling. These files can supply
+\passthrough{\lstinline!I2D!} and \passthrough{\lstinline!wvlGrid!} to
+the existing visualization script, but their intensity model must be
+kept in mind. The metadata loads with
+\passthrough{\lstinline!allow\_pickle=False!}; no Python object
+deserialization is required.
+
+\passthrough{\lstinline!tau\_static!} is a useful comparison when
+velocity gradients move absorbing layers out of resonance. It includes
+thermal and selected microturbulent broadening. For a multiplet it is
+the sum of component opacities at the \textbf{shared reference
+wavelength}, not a sum of each component's individual peak.
+
+\passthrough{\lstinline!tau\_peak!} depends on the chosen finite
+spectral grid and is not a guaranteed continuous maximum. The script
+warns when resolved velocities exceed the spectral window or when the
+sample spacing is greater than one third of the smallest Doppler b.
+These are basic checks: extend the window enough to capture the wings
+and repeat with finer sampling until the maps and integrated intensities
+converge. Even in the absence of a warning, a near-edge line can lose
+wing flux. The odd default of 401 samples guarantees the exact reference
+wavelength is present.
+
+\subsection{Matplotlib maps of maximum column optical depth}
+
+Add \texttt{--plot} to a synthesis command to save a PNG beside every NPZ:
+
+\begin{lstlisting}[language=bash]
+python compute_spice_optical_depth.py \
+  --model-dir /path/to/MURaM/3D --iterations 400000 \
+  --lines c_3_977 --height-start 150 --downsample 8 --plot
+\end{lstlisting}
+
+The image is named \texttt{spice\_opacity\_c\_3\_977\_400000\_tau\_peak.png}.
+To visualize already saved results without repeating synthesis:
+
+\begin{lstlisting}[language=bash]
+python visualize_spice_optical_depth.py optical_depth_output/spice_opacity_*.npz \
+  --output-dir optical_depth_maps
+\end{lstlisting}
+
+The standalone command reads only \texttt{tau\_peak} and \texttt{metadata},
+and requires NumPy and Matplotlib. It does not load the spectral cubes,
+CHIANTI, or MURaM inputs. Use \texttt{--overwrite} to replace existing images.
+Both commands support \texttt{--plot-scale log|linear},
+\texttt{--plot-limits MIN MAX}, \texttt{--plot-cmap}, and \texttt{--plot-dpi}.
+Defaults are logarithmic grayscale, fixed optical-depth limits of \texttt{1e-3}
+to \texttt{5}, and 180 DPI. Values at or below \texttt{1e-3} are black and
+values at or above \texttt{5} are white; the colorbar spans those same limits
+and has the map's height. Limits are optical depths, not their logarithms.
+Use \texttt{--plot-limits} or \texttt{--plot-cmap} to choose a different
+display scale.
+
+Each pixel shows
+\[
+\tau_{\mathrm{peak}}(x,y)=\max_\lambda\int_{\mathrm{LOS}}\alpha_\lambda\,ds.
+\]
+For nonnegative extinction, cumulative optical depth is largest through the
+complete selected column. The map then takes its maximum over the sampled
+wavelengths; it is not a maximum of the local extinction coefficient. It does
+not calculate a depthwise maximum of cumulative optical depth for inverted
+populations, where extinction can be negative.
+
+The plot labels the two horizontal coordinates \textbf{x [Mm]} and
+\textbf{y [Mm]}: plot x is native MURaM y, plot y is native MURaM z,
+and native MURaM x remains the line of sight. Stored maps have row/column
+order \texttt{(native\_z, native\_y)}, so they are plotted without transposition.
+Coordinates are relative to the domain's horizontal lower boundaries.
+Sampled cell centers are calculated as
+\texttt{(native\_index + 0.5) * cell\_spacing\_cm / 1e8}; display edges lie
+halfway between sampled columns and end at the domain boundaries. Unequal
+spacings, rectangular domains, and downsampling factors that do not divide
+the domain size are supported. Colors represent nearest sampled columns,
+not pixel averages.
+
+A white contour marks \(\tau_{\mathrm{peak}}=1\) when the finite map spans
+that value and both horizontal dimensions have multiple samples.
+In logarithmic maps, finite values at or below the lower limit, including zero
+and negative values, are black; nonfinite pixels are gray and their count is
+annotated. Linear colors retain finite negative optical depths. Rendering uses
+a noninteractive Matplotlib canvas, so synthesis on an HPC compute node does
+not open windows.
+
+Read a result and use the plotting helper from Python:
+
+\begin{lstlisting}[language=Python]
+import json
+import numpy as np
+from scipy.integrate import trapezoid
+from visualize_spice_optical_depth import save_tau_peak_map
+
+with np.load("optical_depth_CIII/spice_opacity_c_3_977_400000.npz",
+             allow_pickle=False) as data:
+    tau_peak = data["tau_peak"][0]
+    tau_static = data["tau_static"][0]
+    integrated_thin = trapezoid(data["I2D"][0], data["wvlGrid"], axis=-1)
+    metadata = json.loads(str(data["metadata"]))
+
+print("Fraction of sampled columns with tau_peak >= 1:", (tau_peak >= 1).mean())
+print("Atomic components:", metadata["atomic"]["components"])
+save_tau_peak_map(tau_peak, metadata, "CIII_tau_peak.png", limits=(0.01, 100))
+\end{lstlisting}
+
+For non-inverted populations, \passthrough{\lstinline!tau << 1!} means
+weak line extinction along the selected column, while
+\passthrough{\lstinline!tau >= 1!} indicates potentially consequential
+opacity. The total optical depth through a column can exceed the optical
+depth between a particular emitting layer and the observer. These
+products do not locate a tau-one surface or save cumulative
+depth-dependent optical depths.
+
+The O VI doublet provides a useful internal comparison. With negligible
+upper populations, equal lower-level columns, and the same velocity
+broadening, its static peak-depth ratio scales as
+\passthrough{\lstinline!f * wavelength!}, approximately two. It is not
+an assumption enforced by the code, and observed intensity ratios also
+depend on excitation and transfer.
+
+\section{Limits and validation}\label{limits-and-validation}
+
+The calculation assumes a Maxwellian electron distribution, equilibrium
+ion fractions, statistical-equilibrium level populations, a single
+ion/electron temperature, and Gaussian profiles. It includes neither an
+external pumping radiation field nor a self-consistent scattering source
+function. Natural and pressure wings, partial redistribution,
+non-equilibrium ionization, and instrumental PSFs/effective areas are
+absent. It is not a calculation of SPICE detector counts. Absence of
+line opacity does not by itself establish that an observed spectrum is
+described fully by collisional emission.
+
+Continuum opacity is also absent. In particular, neutral-hydrogen
+bound-free absorption can affect the short-wavelength band below the
+Lyman edge near 912 Å and the physical Si XII wavelength. A full
+foreground absorption model would need the appropriate neutral
+populations and continuum cross sections. The saved optical depths refer
+exclusively to the selected bound-bound components.
+
+The test suite uses analytic slabs and artificial MURaM-format files. It
+checks absolute line-center normalization, total cell length (including
+a one-cell column), stimulated emission and inversions, thermal and
+microturbulent widths, Doppler shifts, multiplet addition, profile
+normalization, and the wavelength emissivity Jacobian. A nonsquare
+fixture with unequal grid spacings checks the reader transpose, vertical
+path length, height slicing, and observer sign. Invalid cells,
+out-of-grid values, missing inputs, and output collisions are also
+exercised.
+
+\begin{lstlisting}[language=bash]
+python -m unittest discover -s tests -v
+SINSPICE_TEST_CHIANTI=1 python -m unittest discover -s tests -v
+\end{lstlisting}
+
+The second command additionally checks actual catalogue identifications
+and builds a small C III table, compares a tabulated population against
+a direct ChiantiPy solve, verifies cache reuse, and runs the CLI
+workflow on a generated MURaM-format snapshot, including its PNG output.
+Plotting tests check the map orientation and physical extent with unequal
+spacings and non-divisible downsampling, zero/negative/nonfinite pixels, and
+standalone plotting from an NPZ containing only the map and metadata.
+All 15 tests passed using
+ChiantiPy 0.15.2 and CHIANTI 11.0.2. Separate smoke runs built tables
+for all 18 features on a 2 × 2 grid and built the full default 101 × 45
+C III table with two worker processes. The tiny smoke-test grids are
+deliberately insufficient for science; they exercise the interfaces and
+solver paths. Artificial fixtures are not solar-model validation.
+Production MURaM snapshots at the hard-coded GLADE paths were not
+available locally, so no physical opacity maps for those simulations are
+claimed here.
+
+For a scientific production run, first establish the correct geometry
+and composition, then converge the population grids and spectral
+sampling. Use non-LTE/NEI calculations where the inferred optical depths
+or timescales demand them. Record the saved atomic metadata alongside
+any reported results.
+
+\end{document}

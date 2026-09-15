@@ -1,0 +1,306 @@
+\documentclass[11pt]{article}
+
+\usepackage[a4paper,margin=1in]{geometry}
+\usepackage[T1]{fontenc}
+\usepackage{lmodern}
+\usepackage{microtype}
+\usepackage{xcolor}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{listings}
+\usepackage{amsmath}
+\usepackage[hidelinks]{hyperref}
+
+% ---- colours ----------------------------------------------------------------
+\definecolor{accent}{HTML}{1F5FA6}
+\definecolor{codebg}{HTML}{F5F6F8}
+\definecolor{codekw}{HTML}{9B2393}
+\definecolor{codecm}{HTML}{6A8759}
+\definecolor{codestr}{HTML}{C7411E}
+\definecolor{sevhigh}{HTML}{B00020}
+\definecolor{sevmed}{HTML}{B8860B}
+\definecolor{sevlow}{HTML}{3A7D44}
+
+% ---- code style -------------------------------------------------------------
+\lstset{
+  basicstyle=\ttfamily\small,
+  backgroundcolor=\color{codebg},
+  keywordstyle=\color{codekw},
+  commentstyle=\color{codecm}\itshape,
+  stringstyle=\color{codestr},
+  language=Python,
+  showstringspaces=false,
+  breaklines=true,
+  frame=single,
+  rulecolor=\color{codebg},
+  framesep=6pt,
+  xleftmargin=6pt,
+  aboveskip=8pt,
+  belowskip=8pt,
+}
+
+\newcommand{\code}[1]{\texttt{#1}}
+\newcommand{\hh}[1]{\vspace{2pt}\noindent\textbf{#1}\par\vspace{1pt}}
+
+\title{\vspace{-1.5em}\textbf{\color{accent}sinSPICE}\\[2pt]
+\large Synthetic Ultraviolet Spectral-Line Emission from 3D MURaM Simulations\\[4pt]
+\normalsize Code Review \& Functional Description}
+\author{}
+\date{\today}
+
+\begin{document}
+\maketitle
+\vspace{-3em}
+
+% =============================================================================
+\section{Purpose}
+
+\textbf{sinSPICE} is a research code that turns three-dimensional radiative-MHD
+simulations of the solar atmosphere into \emph{synthetic ultraviolet emission-line
+spectra}, of the kind observed by instruments such as Solar Orbiter/SPICE (from
+which the name derives). Given a MURaM simulation snapshot, it produces
+wavelength-resolved intensity maps of a chosen transition-region or coronal
+emission line, for a time series of snapshots.
+
+Concretely, the pipeline performs four steps:
+
+\begin{enumerate}[nosep,leftmargin=1.4em]
+  \item \textbf{Read} temperature, electron density and velocity cubes from
+        MURaM binary output.
+  \item \textbf{Build} a CHIANTI contribution function $G(T,n_e)$ for a
+        selected ion and spectral line.
+  \item \textbf{Integrate} a Doppler-shifted, thermally broadened Gaussian line
+        profile through every vertical column of the model atmosphere.
+  \item \textbf{Repeat} across many timesteps (in parallel) and save the
+        resulting intensity cube to disk.
+\end{enumerate}
+
+The emergent product is an array of shape
+$(\,n_{\text{time}},\, n_x,\, n_y,\, n_\lambda\,)$: for each snapshot, an image of
+the Sun in the chosen line, resolved in wavelength at every pixel.
+
+% =============================================================================
+\section{Repository Layout}
+
+The tracked source is deliberately small; the heavy lifting is delegated to
+NumPy, SciPy, ChiantiPy and joblib.
+
+\begin{center}
+\small
+\begin{tabular}{@{}lp{10.6cm}@{}}
+\toprule
+\textbf{Path} & \textbf{Role} \\
+\midrule
+\code{modules/muram.py} & Low-level readers for MURaM binary formats (full cubes, sub-cubes, slices, columns, intensities). Memory-maps 3D data. \\
+\code{modules/dataLoader.py} & \code{MURaMData}: application-level wrapper exposing \code{Temp}, \code{ne}, \code{vz} for one snapshot. \\
+\code{modules/synthesizeLines.py} & The physics core: \code{spectralLine} ($G(T,n_e)$ tables) and \code{spectrum} (1D/2D line synthesis). \\
+\code{modules/utils.py} & CLI argument parser and the Gaussian profile helper. \\
+\code{example.py} & Hard-coded Ne\,VIII 770\,\AA\ time-series driver. \\
+\code{example\_CIII.py} & Same driver, but ion parameters come from the command line. \\
+\code{scripts/example.sh} & PBS batch script for the NCAR/GLADE HPC environment. \\
+\code{examineSynthesis.ipynb} & Notebook for loading and inspecting saved output. \\
+\code{docs/introduction.md} & Extended prose walkthrough of the internals. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent The clean separation of concerns is the code's main structural virtue:
+\code{muram.py} knows \emph{file formats}, \code{dataLoader.py} knows \emph{which
+variables synthesis needs}, and \code{synthesizeLines.py} knows \emph{line
+physics}. The \code{example*.py} scripts are thin orchestrators.
+
+% =============================================================================
+\section{Data Flow}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{2.9cm}c p{2.9cm}c p{2.9cm}@{}}
+\toprule
+\textbf{Read} & $\rightarrow$ & \textbf{Configure} & $\rightarrow$ & \textbf{Synthesize} \\
+\midrule
+MURaM binaries \newline {\scriptsize \code{eosT}, \code{eosne}, \code{result\_prim\_*}} & &
+\code{MURaMData} \newline {\scriptsize $\rightarrow$ \code{Temp}, \code{ne}, \code{vz}} & &
+\code{spectrum} + CHIANTI \newline {\scriptsize $G(T,n_e)$ spline, $\lambda$ grid} \\
+\bottomrule
+\end{tabular}
+
+\vspace{4pt}
+{\small $\Longrightarrow$\; per-column integration $\Longrightarrow$\;
+\code{.npz} output (\code{I2D}, \code{wvlGrid})}
+\end{center}
+
+\noindent The outer time loop is parallelised over snapshots with
+\code{joblib.Parallel}; each worker loads one snapshot and returns one
+$(n_x,n_y,n_\lambda)$ cube.
+
+% =============================================================================
+\section{How Each Layer Works}
+
+\hh{Reading MURaM (\code{muram.py}).}
+\code{MuramCube} subclasses \code{numpy.memmap} so that a full 3D cube is never
+loaded into RAM unless sliced. A \code{Header.<iter>} file supplies the grid
+shape, cell sizes, domain size and simulation time. Because the binary storage
+order is $(z,y,x)$, the reader opens the memmap with the reversed shape and
+transposes it back to a Python-facing $(x,y,z)$ ordering (with $x$ vertical). A
+\code{\_varmap} dictionary maps friendly names (\code{rho}, \code{Temp},
+\code{ne}, \code{Bx}, heating and current terms, $\ldots$) to file prefixes.
+\code{MuramSnap} simply attempts every known variable and records which files
+were \code{available}. Parallel \code{MuramSub*} classes handle subdomain output,
+and \code{MuramSlice}/\code{MuramColumn}/\code{MuramIntensity} handle 2D products.
+
+\hh{Adapting the data (\code{dataLoader.py}).}
+\code{MURaMData.loadModel()} opens a snapshot and exposes exactly the three cubes
+the synthesis needs, each transposed:
+\code{Temp = muramModel.Temp.T}, \code{ne = muramModel.ne.T},
+\code{vz = muramModel.vx.T}. The last axis after transposition is MURaM's
+vertical direction, i.e.\ the line-of-sight integration axis.
+
+\hh{The contribution function (\code{spectralLine}).}
+For a chosen ion, \code{computeGtables()} builds a table of the line emissivity
+$G(T,n_e)$ over a log-spaced grid ($\log_{10}T \in [4, 7.5]$,
+$\log_{10}n_e \in [5, 12]$ by default) by calling ChiantiPy per density sample,
+then wraps it in a \code{RectBivariateSpline} for fast interpolation during
+synthesis. Table generation is itself parallelised over density samples.
+
+\hh{Line synthesis (\code{spectrum}).}
+For a single column, \code{compute\_spectrum1D} walks up in height and, at each
+cell, adds a normalised Gaussian weighted by $G(T,n_e)$:
+\begin{align}
+\Delta\lambda_{\text{Doppler}} &= \frac{v_z}{c}\,\lambda_0,
+&
+\text{FWHM}_{\text{thermal}} &= \lambda_0\sqrt{\frac{8\ln 2\,k_B T}{m_{\text{ion}}\,c^2}},
+\\[2pt]
+I(\lambda) &= \sum_{z}
+   G\!\left(T_z, n_{e,z}\right)\,
+   \mathcal{G}\!\left(\lambda;\ \lambda_0+\Delta\lambda_{\text{Doppler}},\ \sigma_z\right),
+& \sigma_z &= \frac{\text{FWHM}_{\text{thermal}}}{2.355}.
+\end{align}
+\code{compute\_2Dspectrum} applies this to every $(x,y)$ column. It first clips
+away the deep, hot convection-zone layers by finding, per column, the height
+nearest \code{TempClip}\,$=2\times10^4$\,K (searching only above a fixed
+\code{indexOffset = 150}), and integrates from there upward.
+
+% =============================================================================
+\section{Running It}
+
+\begin{lstlisting}
+python example_CIII.py --ion c --ion_level 3 \
+    --lambda0 977 --numWaves 200 --dLambda 0.015
+\end{lstlisting}
+
+\noindent Runtime configuration (\code{model\_dir}, \code{workDir},
+\code{tStart}/\code{tEnd}/\code{dTimeStep}, \code{downsample},
+\code{n\_jobs}) is edited directly in the driver script. Output is written by
+\code{numpy.savez} as an \code{.npz} file containing \code{I2D} (the intensity
+cube) and \code{wvlGrid} (the wavelength axis). An integrated line image for one
+snapshot is \code{I2D[t].sum(axis=2)}.
+
+% =============================================================================
+\section{Code Review}
+
+The code is scientifically well-structured and readable. The review below is
+intended to harden it; findings are ordered by severity. Where a numeric factor
+is quoted, it was confirmed by a standalone calculation for the flagship
+Ne\,VIII 770\,\AA\ case.
+
+\newcommand{\sev}[2]{\textcolor{#1}{\textbf{#2}}}
+
+\begin{center}
+\small
+\begin{tabular}{@{}p{1.4cm}p{3.2cm}p{10.0cm}@{}}
+\toprule
+\textbf{Sev.} & \textbf{Location} & \textbf{Finding} \\
+\midrule
+
+\sev{sevhigh}{High} & \code{synthesizeLines.py} \newline \code{compute\_spectrum1D} &
+Thermal-width unit mismatch. $c$ is CGS (\code{3e10} cm/s, consistent with the
+Doppler term where $v_z$ is in cm/s), but $k_B$ is SI (\code{1.380649e-23} J/K)
+and \code{ionMass} is in kg. Mixing SI $k_B$/mass with a cm/s $c$ makes every
+thermal line width \textbf{$\sim$100$\times$ too narrow}. Fix: use $c=3\times10^{8}$\,m/s
+inside the thermal term (or switch $k_B$ and mass to CGS). \\
+
+\addlinespace
+\sev{sevhigh}{High} & \code{synthesizeLines.py} \newline \code{spectrum.\_\_init\_\_}, \code{mass\_dict} &
+The atomic-mass table mixes atomic \emph{mass} and atomic \emph{number}:
+\code{c}=12 and \code{mg}=24 are masses (correct), but \code{ne}=10, \code{o}=8,
+\code{n}=7, \code{fe}=26, \code{s}=16 are atomic \emph{numbers}. The flagship
+Ne\,VIII case uses 10 instead of $\approx$20, widening its thermal profile by
+$\sqrt{2}$. (Net effect for Ne\,VIII, combined with the row above:
+$\sim$70$\times$ too narrow.) Also \code{"s":16} appears twice. \\
+
+\addlinespace
+\sev{sevhigh}{High} & \code{synthesizeLines.py} \newline \code{def\_GTnfn} call &
+The saved-table \emph{loading} path is unreachable. \code{spectrum.\_\_init\_\_}
+calls \code{def\_GTnfn(self.loadGTables, self.GTablesFile)} \emph{positionally},
+but the signature is \code{def\_GTnfn(TRange, neRange, loadGtable=False,
+gSaveFile=None)}. So \code{loadGtable} keeps its default \code{False} and the
+code always recomputes tables via CHIANTI, ignoring \code{GTablesFile}. Compounded
+by \code{self.temp, self.ne, self.GTne\_table = np.load(gSaveFile)}, which cannot
+unpack an \code{NpzFile}; use \code{np.load(...)} keys (or \code{allow\_pickle})
+explicitly. \\
+
+\addlinespace
+\sev{sevmed}{Medium} & \code{dataLoader.py:19} &
+\code{loadModel(verbose=True)} prints \code{run1.available}; \code{run1} is
+undefined $\Rightarrow$ \code{NameError}. Should reference
+\code{self.muramModel.available}. \\
+
+\addlinespace
+\sev{sevmed}{Medium} & \code{dataLoader.py:23} &
+\code{self.vz = self.muramModel.vx.T}. Physically defensible ($x$ is MURaM's
+vertical axis, and the integration is along the vertical line of sight), but the
+name \code{vz} sourced from \code{vx} is a trap. Add a comment stating the
+line-of-sight convention explicitly. \\
+
+\addlinespace
+\sev{sevmed}{Medium} & \code{example.py:92--115} &
+The trailing plotting loop is broken/leftover: \code{tStep} is undefined at
+module scope ($\Rightarrow$ \code{NameError}); indices like
+\code{I2D[el,100,100,el]} and \code{I2D[el,:,:,50]} conflate the timestep and
+wavelength axes; and \code{I2D} is pre-allocated as
+$(n_x,n_y,n_\lambda,n_t)$ but then overwritten by the \code{Parallel} result
+ordered $(n_t,n_x,n_y,n_\lambda)$. Delete or repair. \\
+
+\addlinespace
+\sev{sevlow}{Low} & \code{example*.py} &
+\code{nx = ny = ...shape[0]} assumes a square horizontal domain; use the true
+\code{shape[0]} and \code{shape[1]}. \\
+
+\addlinespace
+\sev{sevlow}{Low} & \code{synthesizeLines.py} \newline \code{computeGtables} &
+Grid uses \code{np.arange(num)/num} rather than \code{/(num-1)}, so the endpoint
+(\code{Tmax}, \code{neMax}) is never actually reached (mild off-by-one in span). \\
+
+\addlinespace
+\sev{sevlow}{Low} & \code{synthesizeLines.py} \newline \code{compute\_spectrum1D} &
+\code{Gtne(T,ne)} is evaluated twice per cell (once in the \code{if}, once in the
+body). Cache it in a local to halve interpolation calls in the hot loop. \\
+
+\addlinespace
+\sev{sevlow}{Low} & Whole repo &
+Research-script rough edges: hard-coded HPC paths and \code{n\_jobs}; per-column
+inner loop is serial (the \code{joblib} path is commented out); no
+\code{requirements.txt}/\code{environment.yml}; \code{modules/} is not an
+importable package (relies on \code{sys.path.append}); no tests. \\
+
+\bottomrule
+\end{tabular}
+\end{center}
+
+\subsection*{Suggested next steps}
+\begin{enumerate}[nosep,leftmargin=1.4em]
+  \item Fix the thermal-width units and the atomic-mass table --- these change
+        the science output directly.
+  \item Repair (and unit-test) the $G(T,n_e)$ load path so precomputed tables
+        can actually be reused.
+  \item Lift paths, time range, \code{downsample} and \code{n\_jobs} into CLI
+        arguments; add a dependency file and package \code{modules/}.
+  \item Add a small synthetic-atmosphere regression test for
+        \code{compute\_spectrum1D}/\code{compute\_2Dspectrum}.
+\end{enumerate}
+
+\vfill
+\noindent{\footnotesize Generated from a review of the \code{sinSPICE} source
+tree. Line references reflect the state of the working tree at review time.}
+
+\end{document}
