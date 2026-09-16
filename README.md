@@ -111,7 +111,7 @@ Full-domain cube files include:
 
 - `Header.000000`, `Header.000100`, etc.
 - `eosT.<iteration>` for temperature
-- `eosne.<iteration>` for electron density
+- `eosne.<iteration>` for electron density, when available
 - `result_prim_1.<iteration>`, currently loaded by `MURaMData` into `vz`
 - `result_prim_0.<iteration>` for mass density in g cm^-3
 
@@ -119,6 +119,27 @@ The low-level reader also knows many other MURaM variables, including density,
 velocity components, magnetic fields, pressure, heating terms, currents,
 optical depth, and selected auxiliary fields. Missing files are skipped by
 `MuramSnap` and recorded in the `unavailable` list.
+
+If `eosne.<iteration>` is missing but `result_prim_0.<iteration>` is present,
+`MuramSnap` supplies a lazy electron-density fallback using
+`ne = 1.2 * rho / (1.4271 * atomic_mass)`. This is the fully ionized,
+solar-composition approximation appropriate to hot transition-region and coronal
+plasma. The snapshot records `ne` in `derived` and sets
+`ne_source = "rho_fully_ionized"`; pass `derive_ne=False` to `MuramSnap` to
+require an electron-density file.
+
+If both `eosne` and `result_prim_0` are absent but `eosP` and `eosT` exist, the
+same fallback first applies the ideal-gas relation with 2.3 total particles per
+hydrogen nucleus:
+
+```text
+nH  = P / (2.3 k_B T)
+rho = 1.4271 atomic_mass nH
+ne  = 1.2 nH
+```
+
+Here pressure is in dyn cm^-2, temperature is in K, number densities are in
+cm^-3, and mass density is in g cm^-3.
 
 ## Running The Existing Examples
 

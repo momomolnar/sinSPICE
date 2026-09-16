@@ -11,7 +11,179 @@ attributes such as iteration number and simulation time.
 
 import numpy as np
 import os.path
+import warnings
 from collections import OrderedDict
+
+
+ATOMIC_MASS_G = 1.66053906660e-24
+BOLTZMANN_ERG_K = 1.380649e-16
+DEFAULT_WEIGHT_PER_HYDROGEN = 1.4271
+DEFAULT_ELECTRONS_PER_HYDROGEN = 1.2
+DEFAULT_PARTICLES_PER_HYDROGEN = 2.3
+
+
+class DerivedMuramCube(np.lib.mixins.NDArrayOperatorsMixin):
+    """Array-like cube obtained by scaling a source or source/denominator ratio.
+
+    Keeping the scale operation lazy avoids allocating an additional full-size
+    array when a derived quantity, such as the approximate electron density,
+    is first attached to a snapshot. Indexing materializes only the requested
+    portion of the source cube.
+    """
+
+    def __init__(self, source, scale, var, source_var, denominator=None):
+        self._source = source
+        self._denominator = denominator
+        if denominator is not None and denominator.shape != source.shape:
+            raise ValueError("Derived-cube numerator and denominator shapes must match.")
+        self.scale = np.float32(scale)
+        self.var = var
+        self.source_var = source_var
+        for name in ("datapath", "filepath", "iteration", "dX", "X", "time",
+                     "dtime", "vamax"):
+            if hasattr(source, name):
+                setattr(self, name, getattr(source, name))
+
+    @property
+    def shape(self):
+        return self._source.shape
+
+    @property
+    def ndim(self):
+        return self._source.ndim
+
+    @property
+    def size(self):
+        return self._source.size
+
+    @property
+    def nbytes(self):
+        return self.size * self.dtype.itemsize
+
+    @property
+    def dtype(self):
+        dtypes = [self._source.dtype, self.scale.dtype]
+        if self._denominator is not None:
+            dtypes.append(self._denominator.dtype)
+        return np.result_type(*dtypes)
+
+    @property
+    def T(self):
+        return self.transpose()
+
+    def __len__(self):
+        return len(self._source)
+
+    def __getitem__(self, key):
+        values = self._source[key]
+        if self._denominator is not None:
+            values = np.divide(values, self._denominator[key], dtype=self.dtype)
+        return np.multiply(values, self.scale, dtype=self.dtype)
+
+    def __array__(self, dtype=None, copy=None):
+        output_dtype = self.dtype if dtype is None else np.dtype(dtype)
+        values = self._source
+        if self._denominator is not None:
+            values = np.divide(values, self._denominator, dtype=output_dtype)
+        result = np.multiply(values, self.scale, dtype=output_dtype)
+        if copy is True:
+            return result.copy()
+        return result
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        converted = tuple(np.asarray(value) if isinstance(value, DerivedMuramCube)
+                          else value for value in inputs)
+        if kwargs.get("out") is not None:
+            kwargs["out"] = tuple(
+                np.asarray(value) if isinstance(value, DerivedMuramCube) else value
+                for value in kwargs["out"]
+            )
+        return getattr(ufunc, method)(*converted, **kwargs)
+
+    def transpose(self, *axes):
+        denominator = (None if self._denominator is None
+                       else self._denominator.transpose(*axes))
+        return type(self)(self._source.transpose(*axes), self.scale,
+                          self.var, self.source_var, denominator)
+
+    def reshape(self, *shape, order="C"):
+        denominator = (None if self._denominator is None
+                       else self._denominator.reshape(*shape, order=order))
+        return type(self)(self._source.reshape(*shape, order=order), self.scale,
+                          self.var, self.source_var, denominator)
+
+    def astype(self, dtype, order="K", casting="unsafe", subok=True, copy=True):
+        return np.asarray(self).astype(dtype, order=order, casting=casting,
+                                       subok=subok, copy=copy)
+
+    def copy(self, order="C"):
+        return np.array(self, copy=True, order=order)
+
+
+def _add_thermodynamic_fallbacks(snapshot, *, derive_ne, weight_per_hydrogen,
+                                 electrons_per_hydrogen,
+                                 particles_per_hydrogen):
+    """Attach approximate ``rho`` and ``ne`` when their cubes do not exist."""
+    snapshot.derived = []
+    if hasattr(snapshot, "rho"):
+        snapshot.rho_source = "result_prim_0"
+    elif derive_ne and hasattr(snapshot, "Pres") and hasattr(snapshot, "Temp"):
+        factors = (weight_per_hydrogen, electrons_per_hydrogen,
+                   particles_per_hydrogen)
+        if any(not np.isfinite(value) or value <= 0 for value in factors):
+            raise ValueError("Thermodynamic fallback factors must be finite and positive.")
+        # P / (k_B T) is the total particle density. Dividing it by the
+        # particles per H nucleus and multiplying by the mass per H gives rho.
+        rho_scale = (weight_per_hydrogen * ATOMIC_MASS_G /
+                     (particles_per_hydrogen * BOLTZMANN_ERG_K))
+        snapshot.rho = DerivedMuramCube(
+            snapshot.Pres, rho_scale, "rho", ("Pres", "Temp"), snapshot.Temp
+        )
+        snapshot.rho_source = "eosP_eosT_fully_ionized"
+        snapshot.derived.append("rho")
+        if "rho" in snapshot.unavailable:
+            snapshot.unavailable.remove("rho")
+        if "rho" not in snapshot.available:
+            snapshot.available.append("rho")
+        warnings.warn(
+            "No mass-density cube was found; deriving rho from eosP and eosT "
+            f"with the fully ionized ideal-gas approximation using "
+            f"{particles_per_hydrogen:g} particles per hydrogen nucleus.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+    else:
+        snapshot.rho_source = None
+
+    if hasattr(snapshot, "ne"):
+        snapshot.ne_source = "eosne"
+        return
+    if not derive_ne or not hasattr(snapshot, "rho"):
+        snapshot.ne_source = None
+        return
+    if (not np.isfinite(weight_per_hydrogen) or weight_per_hydrogen <= 0 or
+            not np.isfinite(electrons_per_hydrogen) or electrons_per_hydrogen <= 0):
+        raise ValueError("Electron-density fallback factors must be finite and positive.")
+
+    # rho [g cm^-3] / (mass per H nucleus [g]) gives nHtot [cm^-3].
+    # At hot transition-region/coronal temperatures, a solar-composition plasma
+    # supplies approximately 1.2 free electrons per hydrogen nucleus.
+    scale = (electrons_per_hydrogen /
+             (weight_per_hydrogen * ATOMIC_MASS_G))
+    snapshot.ne = DerivedMuramCube(snapshot.rho, scale, "ne", "rho")
+    snapshot.ne_source = "rho_fully_ionized"
+    snapshot.derived.append("ne")
+    if "ne" in snapshot.unavailable:
+        snapshot.unavailable.remove("ne")
+    if "ne" not in snapshot.available:
+        snapshot.available.append("ne")
+    warnings.warn(
+        "No electron-density cube was found; deriving ne from rho with the "
+        f"fully ionized approximation ne = {electrons_per_hydrogen:g} * rho / "
+        f"({weight_per_hydrogen:g} * atomic_mass).",
+        RuntimeWarning,
+        stacklevel=3,
+    )
 
 def read_hmean(datapath, iteration):
     filename = f"hmean1D.{iteration:06d}"
@@ -314,8 +486,15 @@ class MuramSnap():
     Args:
       datapath (str):   Path to a MURaM output directory containing data cubes
       iteration (int):  iteration number
+      derive_ne (bool): Derive electron density from rho when eosne is absent
+      weight_per_hydrogen (float): Gas mass per H nucleus in atomic mass units
+      electrons_per_hydrogen (float): Free electrons per H nucleus in the fallback
+      particles_per_hydrogen (float): Total particles per H nucleus in the fallback
     """
-    def __init__(self, datapath, iteration):
+    def __init__(self, datapath, iteration, *, derive_ne=True,
+                 weight_per_hydrogen=DEFAULT_WEIGHT_PER_HYDROGEN,
+                 electrons_per_hydrogen=DEFAULT_ELECTRONS_PER_HYDROGEN,
+                 particles_per_hydrogen=DEFAULT_PARTICLES_PER_HYDROGEN):
         self.available = []
         self.unavailable = []
         for var in MuramCube._varmap.keys():
@@ -325,7 +504,14 @@ class MuramSnap():
                 self.unavailable.append(var)
                 continue
             setattr(self, var, cube)
-            self.available.append(var) 
+            self.available.append(var)
+        _add_thermodynamic_fallbacks(
+            self,
+            derive_ne=derive_ne,
+            weight_per_hydrogen=weight_per_hydrogen,
+            electrons_per_hydrogen=electrons_per_hydrogen,
+            particles_per_hydrogen=particles_per_hydrogen,
+        )
 
 class MuramSubCube(np.memmap):
     """A cube (x, y, z) of MURaM output
@@ -415,8 +601,15 @@ class MuramSubSnap():
     Args:
       datapath (str):   Path to a MURaM output directory containing data cubes
       iteration (int):  iteration number
+      derive_ne (bool): Derive electron density from rho when eosne is absent
+      weight_per_hydrogen (float): Gas mass per H nucleus in atomic mass units
+      electrons_per_hydrogen (float): Free electrons per H nucleus in the fallback
+      particles_per_hydrogen (float): Total particles per H nucleus in the fallback
     """
-    def __init__(self, datapath, iteration):
+    def __init__(self, datapath, iteration, *, derive_ne=True,
+                 weight_per_hydrogen=DEFAULT_WEIGHT_PER_HYDROGEN,
+                 electrons_per_hydrogen=DEFAULT_ELECTRONS_PER_HYDROGEN,
+                 particles_per_hydrogen=DEFAULT_PARTICLES_PER_HYDROGEN):
         self.available = []
         self.unavailable = []
         for var in MuramSubCube._varmap.keys():
@@ -426,4 +619,11 @@ class MuramSubSnap():
                 self.unavailable.append(var)
                 continue
             setattr(self, var, cube)
-            self.available.append(var) 
+            self.available.append(var)
+        _add_thermodynamic_fallbacks(
+            self,
+            derive_ne=derive_ne,
+            weight_per_hydrogen=weight_per_hydrogen,
+            electrons_per_hydrogen=electrons_per_hydrogen,
+            particles_per_hydrogen=particles_per_hydrogen,
+        )

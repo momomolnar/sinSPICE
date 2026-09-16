@@ -158,12 +158,37 @@ prefixes. Examples:
 | `vz` | `result_prim_3` | velocity component |
 | `Temp` | `eosT` | temperature |
 | `Pres` | `eosP` | pressure |
-| `ne` | `eosne` | electron density |
+| `ne` | `eosne` | electron density; derived from `rho` if absent |
 | `tau` | `tau` | optical depth |
 
 Many additional terms are listed for heating, current, flux, and auxiliary
 fields. `MuramSnap` attempts to open every mapped variable and records the
-successful names in `available` and missing names in `unavailable`.
+successful names in `available` and missing names in `unavailable`. When the
+`eosne` cube is absent but `rho` is available, it derives electron density with
+
+```python
+ne = 1.2 * rho / (1.4271 * 1.66053906660e-24)
+```
+
+for `rho` in g cm^-3 and `ne` in cm^-3. This assumes hot, fully ionized plasma
+with solar composition. The calculation is lazy, so slicing the derived cube
+only reads and converts that part of `rho`. Derived variables are listed in
+`snap.derived`, and `snap.ne_source` identifies whether `ne` came from a file or
+the approximation. Use `MuramSnap(..., derive_ne=False)` to disable the
+fallback.
+
+If `rho` is also unavailable, but `eosP` and `eosT` are present, the reader uses
+the fully ionized ideal-gas approximation to derive both required densities:
+
+```python
+nH = pressure / (2.3 * 1.380649e-16 * temperature)
+rho = 1.4271 * 1.66053906660e-24 * nH
+ne = 1.2 * nH
+```
+
+The default 2.3 is the approximate total number of ions plus electrons per
+hydrogen nucleus for fully ionized solar-composition material. It can be changed
+with `particles_per_hydrogen=`.
 
 ### Headers And Shapes
 
