@@ -13,12 +13,12 @@ from synthesizeLines import spectrum
 
 
 # model_dir = "/glade/campaign/hao/radmhd/Rempel/SSD_CHR_GPU_NewEOS/Chromosphere_ng_open_25x25x25Mm_30min_2sec/3D/"
-model_dir = "/glade/campaign/hao/radmhd/Rempel/Spot_Motion/AR_25Mm_v1000_vz300_disp/3D/"
+model_dir = "/glade/campaign/hao/radmhd/Rempel/ASD_2023/Run_Corona_1728x1024x1024_ASD_closed/3D/"
 model_label = "AR_11158_10kG"
 
 workDir = "/glade/work/mmolnar/sinSPICE/"
-tStart = 400000
-tEnd = 502000
+tStart = 90000
+tEnd = 100000
 dTimeStep = 2000
 nTimeSteps = (tEnd - tStart) // dTimeStep + 1
 

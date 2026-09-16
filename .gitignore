@@ -1,0 +1,18 @@
+.DS_Store
+.idea/
+__pycache__/
+*.py[cod]
+
+# Generated synthesis products and visualizations
+*_frames/
+movies/
+data/
+*.tar.gz
+
+# Documentation build and editor temporary files
+*.aux
+*.log
+~$*.pptx
+
+# Accidental local cache tree whose directory name is one space
+/[ ]/
