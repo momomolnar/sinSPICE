@@ -114,6 +114,35 @@ class EmissionTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 s.compute_spectrum1D([5e4], [1e10], [0.], **kwargs)
 
+    def test_2d_synthesis_skips_invalid_cells_and_invalid_clip_temperatures(self):
+        s = make_spectrum()
+        shape = (1, 1, 157)
+        temperature = np.full(shape, 5e4)
+        electron_density = np.full(shape, 1e10)
+        velocity = np.zeros(shape)
+        mass_density = np.full(shape, 1e-14)
+
+        # A NaN at the start of the clipping search must not become zClip.
+        temperature[..., 150] = np.nan
+        temperature[..., 151] = 2e4
+        temperature[..., 152] = 0.
+        electron_density[..., 153] = 0.
+        mass_density[..., 154] = np.nan
+        velocity[..., 155] = np.inf
+
+        expected_nh = .74 * 1e-14 / (1.00794 * 1.66053906660e-24)
+        expected_area = 2 * 2e-24 * 1e10 * expected_nh * 1e7
+        for jobs in (1, 2):
+            with self.subTest(jobs=jobs), self.assertWarnsRegex(
+                    RuntimeWarning, "Ignored 4 of 6 line-of-sight cells"):
+                s.compute_2Dspectrum(
+                    temperature, electron_density, velocity,
+                    rho=mass_density, ds=1e7, n_jobs=jobs,
+                )
+            self.assertEqual(s.I2D.shape, (1, 4001))
+            self.assertAlmostEqual(moments(s, s.I2D[0])[0] / expected_area,
+                                   1., places=10)
+
     @unittest.skipUnless(os.environ.get("SINSPICE_TEST_CHIANTI") == "1", "Requires CHIANTI")
     def test_real_chianti_emission_measure_normalization(self):
         import ChiantiPy.core as ch

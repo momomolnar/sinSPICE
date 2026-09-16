@@ -1,5 +1,6 @@
 import numpy as np
 import os
+import warnings
 from scipy.interpolate import RectBivariateSpline
 
 try:
@@ -176,14 +177,57 @@ class spectrum():
 
     def compute_spectrum_chunk(self, Temp, ne, vz, zClip, rho, ds,
                                hydrogen_mass_fraction, observer):
-        return np.array([
-            self.compute_spectrum1D(Temp[el, zClip[el]:],
-                                    ne[el, zClip[el]:],
-                                    vz[el, zClip[el]:], rho=rho[el, zClip[el]:], ds=ds,
-                                    hydrogen_mass_fraction=hydrogen_mass_fraction,
-                                    observer=observer)
-            for el in range(Temp.shape[0])
-        ])
+        spectra, _, _ = self._compute_spectrum_chunk_with_diagnostics(
+            Temp, ne, vz, zClip, rho, ds, hydrogen_mass_fraction, observer
+        )
+        return spectra
+
+
+    def _compute_spectrum_chunk_with_diagnostics(
+            self, Temp, ne, vz, zClip, rho, ds,
+            hydrogen_mass_fraction, observer):
+        """Synthesize a chunk, assigning zero emissivity to invalid cells."""
+        spectra = []
+        skipped_cells = 0
+        total_cells = 0
+        for el in range(Temp.shape[0]):
+            start = zClip[el]
+            column = [
+                np.asarray(cube[el, start:], dtype=float)
+                for cube in (Temp, ne, vz, rho)
+            ]
+            temperature, electron_density, velocity, mass_density = column
+            valid = (
+                np.isfinite(temperature)
+                & np.isfinite(electron_density)
+                & np.isfinite(velocity)
+                & np.isfinite(mass_density)
+                & (temperature > 0)
+                & (electron_density > 0)
+                & (mass_density > 0)
+            )
+            total_cells += valid.size
+            skipped_cells += valid.size - np.count_nonzero(valid)
+            spectra.append(self.compute_spectrum1D(
+                temperature[valid], electron_density[valid], velocity[valid],
+                rho=mass_density[valid], ds=ds,
+                hydrogen_mass_fraction=hydrogen_mass_fraction,
+                observer=observer,
+            ))
+        return np.asarray(spectra), skipped_cells, total_cells
+
+
+    @staticmethod
+    def _warn_skipped_cells(skipped_cells, total_cells):
+        if skipped_cells:
+            warnings.warn(
+                f"Ignored {skipped_cells:,} of {total_cells:,} line-of-sight "
+                "cells with a non-finite velocity or non-finite/non-positive "
+                "temperature, electron density, or mass density; those cells "
+                "contribute zero emissivity.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
 
 
     def compute_2Dspectrum(self, Temp, ne, vz, TempClip=2e4, n_jobs=1,
@@ -209,8 +253,21 @@ class spectrum():
 
             nAtmos = nx * ny
 
-            indexOffset = 150 # account for the convection zone high temp region
-            zClip = np.argmin(np.abs(Temp[:, :, indexOffset:] - TempClip), axis=-1)
+            if nz == 0:
+                raise ValueError("Input cubes must have at least one vertical cell.")
+
+            # Account for the convection-zone high-temperature region. Invalid
+            # temperatures cannot define the lower integration boundary.
+            indexOffset = min(150, nz - 1)
+            clipTemperature = np.asarray(Temp[:, :, indexOffset:])
+            distanceDtype = np.result_type(clipTemperature.dtype, np.float32)
+            clipDistance = np.abs(
+                clipTemperature.astype(distanceDtype, copy=False) - TempClip
+            )
+            clipDistance[
+                ~np.isfinite(clipTemperature) | (clipTemperature <= 0)
+            ] = np.inf
+            zClip = np.argmin(clipDistance, axis=-1)
             zClip += indexOffset
 
             Temp = Temp.reshape(nx*ny, nz)
@@ -223,8 +280,13 @@ class spectrum():
                 raise ValueError("n_jobs must be nonzero")
 
             if n_jobs == 1:
-                self.I2D = self.compute_spectrum_chunk(
-                    Temp, ne, vz, zClip, rho, ds, hydrogen_mass_fraction, observer)
+                self.I2D, skippedCells, totalCells = (
+                    self._compute_spectrum_chunk_with_diagnostics(
+                        Temp, ne, vz, zClip, rho, ds,
+                        hydrogen_mass_fraction, observer
+                    )
+                )
+                self._warn_skipped_cells(skippedCells, totalCells)
                 return
 
             try:
@@ -249,8 +311,8 @@ class spectrum():
 
             label = progress_label or "Synthesizing domain chunks"
             with joblib_progress(len(chunks), label=label):
-                chunkSpectra = Parallel(n_jobs=parallelJobs)(
-                    delayed(self.compute_spectrum_chunk)(
+                chunkResults = Parallel(n_jobs=parallelJobs)(
+                    delayed(self._compute_spectrum_chunk_with_diagnostics)(
                         Temp[start:stop],
                         ne[start:stop],
                         vz[start:stop],
@@ -259,4 +321,7 @@ class spectrum():
                     )
                     for start, stop in chunks
                 )
-            self.I2D = np.concatenate(chunkSpectra, axis=0)
+            self.I2D = np.concatenate([result[0] for result in chunkResults], axis=0)
+            skippedCells = sum(result[1] for result in chunkResults)
+            totalCells = sum(result[2] for result in chunkResults)
+            self._warn_skipped_cells(skippedCells, totalCells)

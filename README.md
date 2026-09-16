@@ -48,6 +48,8 @@ Calls to `compute_spectrum1D` and `compute_2Dspectrum` require keyword arguments
 `rho` and `ds`. Both accept `observer="top"` (default) or `"bottom"`.
 For the top observer, positive native MURaM `vx` gives a blueshift. The `vz`
 argument retains its historical name but contains this native vertical velocity.
+During 2D synthesis, cells with invalid temperature, density, or velocity are
+reported once and assigned zero emissivity; direct 1D calls remain strict.
 Synthesis output is intensity per Angstrom (erg s^-1 cm^-2 sr^-1 Angstrom^-1),
 assuming CHIANTI's energy/Angstrom configuration. The wavelength grid remains
 descending; reverse both arrays before integrating over wavelength.
